@@ -60,6 +60,7 @@ fun App(vm: AppVm) {
     val pickNew = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) vm.newProject(uris) }
     val pickClip = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> vm.addClips(uris) }
     val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u: Uri? -> if (u != null) vm.addAudio(u) }
+    val pickLut = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u: Uri? -> if (u != null) vm.importLut(u) }
     val storagePerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> vm.saveExport(ok) }
 
     // open the editor as soon as a project is loaded
@@ -90,6 +91,7 @@ fun App(vm: AppVm) {
             BackHandler { if (ed.panel != Panel.NONE) ed.panel = Panel.NONE else { vm.closeEditor(); route = Route.MAIN } }
             EditorRoute(ed, vm, onExport = { route = Route.EXPORT }, onApi = { route = Route.API },
                 onAddClip = { pickClip.launch(arrayOf("video/*")) }, onAddAudio = { pickAudio.launch(arrayOf("audio/*")) },
+                onImportLut = { pickLut.launch(arrayOf("*/*")) },
                 onClose = { vm.closeEditor(); route = Route.MAIN }, modifier = safe)
         }
         Route.EXPORT -> {
@@ -138,13 +140,15 @@ fun App(vm: AppVm) {
 @Composable
 private fun EditorRoute(
     ed: EditorState, vm: AppVm, onExport: () -> Unit, onApi: () -> Unit, onAddClip: () -> Unit, onAddAudio: () -> Unit,
-    onClose: () -> Unit, modifier: Modifier
+    onImportLut: () -> Unit, onClose: () -> Unit, modifier: Modifier
 ) {
+    val luts by vm.luts.collectAsState()
     val ctx = LocalContext.current
     val pc = remember(ed) { PreviewController(ctx, ed) }
     DisposableEffect(pc) { onDispose { pc.release() } }
     LaunchedEffect(ed.mediaVersion) { pc.rebuild() }
     LaunchedEffect(pc) { while (true) { pc.tick(); delay(33) } }
+    LaunchedEffect(ed.tl) { pc.refreshLook() }   // a filter/adjust change shows at once, even while paused
     // filmstrip thumbnails for the timeline (one frame per source video)
     val thumbs = remember(ed) { mutableStateMapOf<String, ImageBitmap>() }
     LaunchedEffect(ed.mediaVersion) {
@@ -159,7 +163,10 @@ private fun EditorRoute(
     Box(modifier) {
         EditorScreen(ed, EditorActions(
             onBack = onClose, onExport = { pc.player.pause(); onExport() }, onAddClip = onAddClip, onAddAudio = onAddAudio,
-            onAutoCaptions = { vm.autoCaptions(it) }, onPlayPause = pc::playPause, onSeek = pc::seekTo, onApi = onApi
+            onAutoCaptions = { vm.autoCaptions(it) }, onPlayPause = pc::playPause, onSeek = pc::seekTo, onApi = onApi,
+            luts = luts, onImportLut = onImportLut,
+            onFreeze = { pc.player.pause(); vm.freezeFrame(it) },
+            onReverse = { pc.player.pause(); vm.reverseClip(it) }
         ), thumbs) { PlayerSurface(pc.player, ed.tl.fill) }
     }
 }

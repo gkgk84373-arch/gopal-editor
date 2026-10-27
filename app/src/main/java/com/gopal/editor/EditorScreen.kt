@@ -70,7 +70,13 @@ class EditorActions(
     val onAutoCaptions: (String) -> Unit = {},
     val onPlayPause: () -> Unit = {},
     val onSeek: (Long) -> Unit = {},
-    val onApi: () -> Unit = {}
+    val onApi: () -> Unit = {},
+    // ---- stage 2A ----
+    val luts: List<LutEntity> = emptyList(),
+    val onImportLut: () -> Unit = {},
+    val onFreeze: (Long) -> Unit = {},
+    val onReverse: (String) -> Unit = {},
+    val onLookChanged: () -> Unit = {}
 )
 
 @Composable
@@ -147,6 +153,9 @@ fun EditorScreen(
             Panel.STYLE -> StylePanel(ed, renderer)
             Panel.ASPECT -> AspectPanel(ed)
             Panel.VOLUME -> VolumePanel(ed)
+            Panel.FILTERS -> FiltersPanel(ed, actions.luts, actions.onImportLut)
+            Panel.ADJUST -> AdjustPanel(ed)
+            Panel.SPEED -> SpeedPanel(ed, actions.onFreeze, actions.onReverse)
             Panel.NONE -> Toolbar(ed, actions)
         }
     }
@@ -168,6 +177,12 @@ private fun Toolbar(ed: EditorState, a: EditorActions) {
             ToolButton(GI.Copy, L.t("Duplicate", "डुप्लीकेट")) { TimelineOps.duplicate(ed.tl, sel)?.let { (t, id) -> ed.edit(t); ed.selected = id } }
             ToolButton(Icons.Default.Delete, L.t("Delete", "डिलीट"), tint = G.Red) { ed.edit(TimelineOps.delete(ed.tl, sel)); ed.selected = null }
             if (track == Track.TEXT) ToolButton(Icons.Default.Edit, L.t("Edit text", "टेक्स्ट बदलें")) { editing = ed.tl.captions.firstOrNull { it.id == sel } }
+            if (track == Track.VIDEO) {
+                ToolButton(GI.Speed, L.t("Speed", "स्पीड")) { ed.panel = Panel.SPEED }
+                ToolButton(GI.Filter, L.t("Filters", "फ़िल्टर")) { ed.panel = Panel.FILTERS }
+                ToolButton(GI.Tune, L.t("Adjust", "एडजस्ट")) { ed.panel = Panel.ADJUST }
+                ToolButton(GI.Reverse, L.t("Reverse", "रिवर्स"), enabled = ed.busy == null) { a.onReverse(sel) }
+            }
             if (track != Track.TEXT) ToolButton(GI.Music, L.t("Volume", "आवाज़")) { ed.panel = Panel.VOLUME }
             if (track == Track.TEXT) ToolButton(GI.TextT, L.t("Style", "स्टाइल")) { ed.panel = Panel.STYLE }
         } else {
@@ -176,6 +191,10 @@ private fun Toolbar(ed: EditorState, a: EditorActions) {
                 TimelineOps.splitAtPlayhead(ed.tl, null, ed.playhead)?.let { (t, right) -> ed.edit(t); ed.selected = right }
             }
             ToolButton(GI.CC, L.t("Captions", "कैप्शन"), tint = G.Accent) { ed.panel = Panel.CAPTIONS }
+            ToolButton(GI.Filter, L.t("Filters", "फ़िल्टर"), enabled = ed.tl.video.isNotEmpty()) { ed.panel = Panel.FILTERS }
+            ToolButton(GI.Tune, L.t("Adjust", "एडजस्ट"), enabled = ed.tl.video.isNotEmpty()) { ed.panel = Panel.ADJUST }
+            ToolButton(GI.Speed, L.t("Speed", "स्पीड"), enabled = ed.tl.video.isNotEmpty()) { ed.panel = Panel.SPEED }
+            ToolButton(GI.Freeze, L.t("Freeze", "फ़्रीज़"), enabled = ed.tl.video.isNotEmpty() && ed.busy == null) { a.onFreeze(FreezeRules.DEFAULT_MS) }
             ToolButton(GI.Music, L.t("Audio", "ऑडियो"), onClick = a.onAddAudio)
             ToolButton(GI.TextT, L.t("Text", "टेक्स्ट")) {
                 val t = TimelineOps.addCaption(ed.tl, ed.playhead, L.t("Your text", "आपका टेक्स्ट"))
@@ -207,7 +226,7 @@ private fun TextEditDialog(initial: String, onDismiss: () -> Unit, onOk: (String
 }
 
 @Composable
-private fun PanelFrame(title: String, ed: EditorState, height: Int = 280, content: @Composable ColumnScope.() -> Unit) {
+internal fun PanelFrame(title: String, ed: EditorState, height: Int = 280, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().height(height.dp).background(G.Surface).padding(horizontal = 14.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(title, Modifier.weight(1f), color = G.Text, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)

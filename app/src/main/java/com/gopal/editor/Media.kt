@@ -17,7 +17,13 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import androidx.media3.common.MediaItem
+import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.common.audio.SpeedChangingAudioProcessor
+import androidx.media3.common.audio.SpeedProvider
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
@@ -209,7 +215,7 @@ private fun volumeProcessors(v: Float): List<AudioProcessor> {
     return listOf(p)
 }
 
-private fun clipped(uri: String, inMs: Long, outMs: Long): MediaItem = MediaItem.Builder().setUri(Uri.parse(uri))
+internal fun clipped(uri: String, inMs: Long, outMs: Long): MediaItem = MediaItem.Builder().setUri(Uri.parse(uri))
     .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(inMs).setEndPositionMs(outMs).build())
     .build()
 
@@ -226,6 +232,63 @@ private fun runTransformer(t: Transformer, comp: Composition, out: File, onProgr
     }
     hd.post(poll)
     cont.invokeOnCancellation { hd.post { t.cancel(); out.delete() } }
+}
+
+internal fun transformerListener(out: File, cont: kotlinx.coroutines.CancellableContinuation<Unit>) = listener(out, cont)
+internal fun startWithProgress(t: Transformer, comp: Composition, out: File, onProgress: (Int) -> Unit, cont: kotlinx.coroutines.CancellableContinuation<Unit>) =
+    runTransformer(t, comp, out, onProgress, cont)
+
+// ---------------- stage 2A: speed + look per clip ----------------
+/** Media3 SpeedProvider over our piecewise-constant schedule (source microseconds from the clip start). */
+class ScheduleSpeedProvider(private val starts: LongArray, private val speeds: FloatArray) : SpeedProvider {
+    override fun getSpeed(timeUs: Long): Float {
+        var i = 0
+        while (i + 1 < starts.size && starts[i + 1] <= timeUs) i++
+        return speeds[i]
+    }
+    override fun getNextSpeedChangeTimeUs(timeUs: Long): Long {
+        for (s in starts) if (s > timeUs) return s
+        return C.TIME_UNSET
+    }
+    companion object {
+        fun of(c: VideoClip): ScheduleSpeedProvider { val (a, b) = SpeedMath.schedule(c.srcLenMs, c.speed, c.curve); return ScheduleSpeedProvider(a, b) }
+    }
+}
+
+/**
+ * Audio for a sped clip.
+ *  - constant speed 0.25x..4x: Sonic time-stretch, pitch kept (setPitch(1)).
+ *  - other constant speeds, and every curve: Media3's SpeedChangingAudioProcessor (keeps A/V length
+ *    in sync), then volume 0 — i.e. muted. [forSpeech] keeps the sound for caption extraction.
+ */
+fun speedAudioProcessors(c: VideoClip, forSpeech: Boolean = false): List<AudioProcessor> {
+    if (!c.hasSpeed) return if (forSpeech) emptyList() else volumeProcessors(if (c.still || c.reversed) 0f else c.volume)
+    if (c.curve == null && (c.audioKept || forSpeech) && SpeedMath.clampSpeed(c.speed) in AUDIO_MIN_SPEED..AUDIO_MAX_SPEED) {
+        val sonic = SonicAudioProcessor().apply { setSpeed(SpeedMath.clampSpeed(c.speed)); setPitch(1f) }
+        return listOf<AudioProcessor>(sonic) + if (forSpeech) emptyList() else volumeProcessors(c.volume)
+    }
+    val p = SpeedChangingAudioProcessor(ScheduleSpeedProvider.of(c))
+    return if (forSpeech) listOf(p) else listOf(p, muteProcessor())
+}
+
+private fun muteProcessor(): AudioProcessor {
+    val p = ChannelMixingAudioProcessor()
+    for (ch in 1..2) p.putChannelMixingMatrix(ChannelMixingMatrix.create(ch, ch).scaleBy(0f))
+    return p
+}
+
+/** Video effects for a clip's speed: constant or curve, same schedule as the timeline maths. */
+fun speedVideoEffects(c: VideoClip): List<Effect> = when {
+    !c.hasSpeed -> emptyList()
+    c.curve == null -> listOf(SpeedChangeEffect(SpeedMath.clampSpeed(c.speed)))
+    else -> listOf(SpeedChangeEffect(ScheduleSpeedProvider.of(c)))
+}
+
+/** The clip's look as an effect (null when neutral, so plain clips stay untouched). */
+fun fxEffect(c: VideoClip): Effect? {
+    if (c.fx.isNeutral) return null
+    val p = FxParams.of(c.fx, LutCache.get(c.fx.lutPath))
+    return GopalFxEffect { p }
 }
 
 private fun listener(out: File, cont: kotlinx.coroutines.CancellableContinuation<Unit>) = object : Transformer.Listener {
@@ -246,12 +309,14 @@ suspend fun exportTimeline(
     val layout = if (tl.fill) Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP else Presentation.LAYOUT_SCALE_TO_FIT
     val frames = CaptionFrames(renderer, tl.captions, tpl, w, h)
     val videoItems = tl.video.mapIndexed { i, c ->
-        val fx = buildList {
+        val fx = buildList<Effect> {
+            addAll(speedVideoEffects(c))                       // speed first: later effects see timeline time
             if (s.fps < 60) add(FrameDropEffect.createDefaultFrameDropEffect(s.fps.toFloat()))   // only ever drops frames
+            fxEffect(c)?.let { add(it) }                       // filter + LUT + adjust (same shader as the preview)
             add(Presentation.createForWidthAndHeight(w, h, layout))
             if (tl.captions.isNotEmpty()) add(OverlayEffect(ImmutableList.of<TextureOverlay>(TimelineCaptionOverlay(frames, tl.videoStart(i)))))
         }
-        EditedMediaItem.Builder(clipped(c.uri, c.inMs, c.outMs)).setEffects(Effects(volumeProcessors(c.volume), fx)).build()
+        EditedMediaItem.Builder(clipped(c.uri, c.inMs, c.outMs)).setEffects(Effects(speedAudioProcessors(c), fx)).build()
     }
     val seqs = mutableListOf(EditedMediaItemSequence(videoItems))
     val plan = AudioPlan.pieces(tl.audio, tl.videoDurMs)
@@ -282,7 +347,11 @@ suspend fun exportTimeline(
 
 /** The edit's sound (main track clips, in timeline time) as one .m4a for speech-to-text. */
 suspend fun extractTimelineAudio(ctx: Context, tl: Timeline, out: File, onProgress: (Int) -> Unit = {}) = suspendCancellableCoroutine<Unit> { cont ->
-    val items = tl.video.map { c -> EditedMediaItem.Builder(clipped(c.uri, c.inMs, c.outMs)).setRemoveVideo(true).build() }
+    val items = tl.video.map { c ->
+        // keep timing identical to the timeline: sped clips are sped here too, so captions land in timeline time
+        EditedMediaItem.Builder(clipped(c.uri, c.inMs, c.outMs)).setRemoveVideo(true)
+            .setEffects(Effects(speedAudioProcessors(c, forSpeech = true), emptyList())).build()
+    }
     val comp = Composition.Builder(listOf(EditedMediaItemSequence(items))).experimentalSetForceAudioTrack(true).build()
     val t = Transformer.Builder(ctx).setAudioMimeType(MimeTypes.AUDIO_AAC).addListener(listener(out, cont)).build()
     runTransformer(t, comp, out, onProgress, cont)

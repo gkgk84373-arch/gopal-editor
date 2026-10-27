@@ -27,4 +27,10 @@ object GI {
     val Download = v("download", "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z")
     val Movie = v("movie", "M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z")
     val Export = v("export", "M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z")
+    // stage 2A (simple shapes drawn for this app)
+    val Speed = v("speed", "M12 4a9 9 0 0 0-9 9h2a7 7 0 0 1 14 0h2a9 9 0 0 0-9-9zm4.2 3.4L11 12.6a2 2 0 1 0 1.4 1.4l5.2-5.2z")
+    val Filter = v("filter", "M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18zm0 2v14a7 7 0 0 1 0-14z")
+    val Tune = v("tune", "M3 6h10v2H3zm14 0h4v2h-4zm-2-2h2v6h-2zM3 16h4v2H3zm8 0h10v2H11zm-2-2h2v6H9z")
+    val Reverse = v("reverse", "M11 6v12l-8-6zm9 0v12l-8-6z")
+    val Freeze = v("freeze", "M4 4h16v16H4zm2 2v12h12V6zm3 2h2v8H9zm4 0h2v8h-2z")
 }

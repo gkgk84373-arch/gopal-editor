@@ -10,5 +10,6 @@ build/
 # never commit signing keys
 *.jks
 *.keystore
+!app/debug.keystore
 keystore_base64.txt
 keystore.properties

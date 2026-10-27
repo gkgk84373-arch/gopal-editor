@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -25,9 +26,16 @@ class PreviewController(ctx: Context, private val ed: EditorState) {
     val player: ExoPlayer = ExoPlayer.Builder(ctx).build()
     private val music: ExoPlayer = ExoPlayer.Builder(ctx).build()
     private var musicClipId: String? = null
-    private var built: List<VideoClip> = emptyList()
+    private var built: List<Triple<String, Long, Long>> = emptyList()
+
+    /** Look of the clip under the playhead; the shader reads it on every frame. */
+    @Volatile private var currentFx: FxParams = FxParams.NEUTRAL
+    private var fxKey: Any? = null
+    private var speedKey = 1f
 
     init {
+        // Stage 2A: one GL effect for the whole player (filters + LUT + adjust); it reads currentFx per frame.
+        runCatching { player.setVideoEffects(listOf<androidx.media3.common.Effect>(GopalFxEffect { currentFx })) }
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 ed.playing = isPlaying
@@ -45,8 +53,9 @@ class PreviewController(ctx: Context, private val ed: EditorState) {
     /** Rebuild the playlist after the clip list changed, keeping the playhead. */
     fun rebuild() {
         val v = ed.tl.video
-        if (v != built) {
-            built = v
+        val ids = v.map { Triple(it.uri, it.inMs, it.outMs) }   // a look/speed change must not reload the playlist
+        if (ids != built) {
+            built = ids
             player.setMediaItems(v.map { item(it.uri, it.inMs, it.outMs) })
             player.prepare()
         }
@@ -56,7 +65,9 @@ class PreviewController(ctx: Context, private val ed: EditorState) {
 
     fun seekTo(t: Long) {
         TimelineOps.locate(ed.tl, t)?.let { loc ->
-            if (loc.index < player.mediaItemCount) player.seekTo(loc.index, loc.offsetMs.coerceAtMost(ed.tl.video[loc.index].durMs - 1))
+            val c = ed.tl.video[loc.index]
+            if (loc.index < player.mediaItemCount) player.seekTo(loc.index, c.outToSrc(loc.offsetMs.coerceAtMost(c.durMs - 1)).coerceAtMost(c.srcLenMs - 1))
+            applyClip(loc.index, c.outToSrc(loc.offsetMs))
         }
         syncMusic(t, force = true)
     }
@@ -72,9 +83,10 @@ class PreviewController(ctx: Context, private val ed: EditorState) {
         if (!player.isPlaying) return
         val i = player.currentMediaItemIndex
         if (i !in ed.tl.video.indices) return
-        val t = ed.tl.videoStart(i) + player.currentPosition
+        val c = ed.tl.video[i]
+        val t = ed.tl.videoStart(i) + c.srcToOut(player.currentPosition)
         ed.playhead = t.coerceIn(0, ed.tl.durationMs)
-        player.volume = ed.tl.video[i].volume.coerceAtMost(1f)
+        applyClip(i, player.currentPosition)
         syncMusic(t, force = false)
     }
 
@@ -90,6 +102,34 @@ class PreviewController(ctx: Context, private val ed: EditorState) {
         } else if (force || abs(music.currentPosition - want) > 250) music.seekTo(want)
         music.volume = c.volume.coerceAtMost(1f)
         if (player.isPlaying && !music.isPlaying) music.play()
+    }
+
+    /**
+     * Speed, sound and look of clip [i] at source offset [srcPos].
+     * Speed: ExoPlayer's playback speed (Sonic, pitch kept), capped at PREVIEW_MAX_SPEED; curves are
+     * followed ~30x a second. Export uses the exact speed. Sound is muted where the export mutes it.
+     */
+    private fun applyClip(i: Int, srcPos: Long) {
+        val c = ed.tl.video.getOrNull(i) ?: return
+        val sp = when {
+            c.curve != null -> SpeedMath.stepSpeed(c.curve, c.srcLenMs, (srcPos.coerceIn(0, c.srcLenMs) / CURVE_STEP_MS).toInt())
+            else -> SpeedMath.clampSpeed(c.speed)
+        }.coerceIn(MIN_SPEED, PREVIEW_MAX_SPEED)
+        if (sp != speedKey) { speedKey = sp; player.playbackParameters = PlaybackParameters(sp, 1f) }
+        player.volume = if (c.still || c.reversed || (c.hasSpeed && !c.audioKept)) 0f else c.volume.coerceAtMost(1f)
+        if (c.fx != fxKey) {
+            fxKey = c.fx
+            currentFx = FxParams.of(c.fx, LutCache.get(c.fx.lutPath))
+        }
+    }
+
+    /** After a look change while paused: redraw the current frame with the new look. */
+    fun refreshLook() {
+        val loc = TimelineOps.locate(ed.tl, ed.playhead) ?: return
+        val c = ed.tl.video[loc.index]
+        if (c.fx == fxKey) return
+        applyClip(loc.index, c.outToSrc(loc.offsetMs))
+        if (!player.isPlaying && loc.index < player.mediaItemCount) player.seekTo(loc.index, player.currentPosition)
     }
 
     fun release() { player.release(); music.release() }

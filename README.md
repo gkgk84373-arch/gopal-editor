@@ -157,3 +157,29 @@ The test APK Tab sent is signed with a different test key: uninstall it once bef
 ./gradlew assembleRelease testDebugUnitTest lintRelease   # unsigned APK in app/build/outputs/apk/release/
 ./gradlew recordPaparazziDebug                            # UI renders in app/src/test/snapshots/images/
 ```
+
+---
+
+## Stage 2A (v1.1): फ़िक्स debug key · fixed debug key
+
+**हिंदी:** अब हर push पर GitHub Actions एक ही `app/debug.keystore` से साइन किया हुआ APK बनाता है, इसलिए हर नया build पुराने के ऊपर बिना uninstall के इंस्टॉल होता है और Updates टैब चलता रहता है। Release secrets अब ज़रूरी नहीं हैं; अगर डाले हुए हैं तो एक अलग `gopal-editor-release.apk` भी बनेगा (Updates टैब debug-key वाला APK ही इस्तेमाल करता है)।
+
+```
+pkg install openjdk-17
+cd ~/GopalEditor
+rm -f app/debug.keystore
+keytool -genkeypair -v -keystore app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+git add -f app/debug.keystore
+git add -A && git commit -m "Stage 2A" && git push
+```
+⚠️ जिसके पास यह keystore है वह इस ऐप का "अपडेट" साइन कर सकता है, इसलिए repo **Private** रखें।
+⚠️ v1.0 (पुरानी test key वाला) एक बार uninstall करें, फिर नया build इंस्टॉल करें। उसके बाद अपडेट सीधे होंगे।
+
+**English:** Every push now builds an APK signed with the same committed `app/debug.keystore`, so each build installs over the previous one without uninstalling, and the Updates tab keeps working. Release secrets are optional now; if they exist, a separately signed `gopal-editor-release.apk` is attached too (the Updates tab keeps using the debug-key APK). Keep the repo **private**: anyone with this keystore can sign an update for the app. Uninstall v1.0 (signed with the old test key) once before installing the first new build.
+
+### Stage 2A features
+- Filters: 23 own GLSL looks + intensity, `.cube` LUT import (up to 65³) with amount; "apply to all clips".
+- Adjust per clip: brightness, contrast, saturation, hue, temperature, tint, vignette, sharpen, blur, HSL (8 bands: hue/saturation/lightness), reset per slider and "reset all".
+- Speed: 0.1x–100x, curve speed (drag points, tap to add, long-press to remove; presets Montage, Hero, Bullet, Jump cut, Flash in, Flash out), freeze frame (1/2/3/5 s), reverse (own MediaCodec pass, clips up to 60 s, result is silent).
+- Sound with speed: kept with pitch preserved from 0.25x to 4x; muted outside that and on curves. Preview plays at most 8x (export uses the exact speed).
+- Captions follow speed changes and freeze frames. Projects migrate from v1 automatically (Room v1→v2).

@@ -29,8 +29,24 @@ enum class Track { VIDEO, AUDIO, TEXT }
 
 data class VideoClip(
     val id: String, val uri: String, val name: String,
-    val srcDurMs: Long, val inMs: Long, val outMs: Long, val volume: Float = 1f
-) { val durMs: Long get() = outMs - inMs }
+    val srcDurMs: Long, val inMs: Long, val outMs: Long, val volume: Float = 1f,
+    // ---- stage 2A ----
+    val speed: Float = 1f,                 // constant speed 0.1x..100x (ignored while [curve] is set)
+    val curve: List<SpeedPt>? = null,      // curve speed (x = source position 0..1, y = speed)
+    val curveName: String? = null,         // preset name shown on the clip, null = custom
+    val fx: ClipFx = ClipFx(),             // filter + LUT + adjust
+    val still: Boolean = false,            // freeze-frame clip (made from one frame, silent)
+    val reversed: Boolean = false          // made by the reverse pass (silent)
+) {
+    /** Source length (out - in). */
+    val srcLenMs: Long get() = outMs - inMs
+    /** Length on the TIMELINE, after speed. Equals [srcLenMs] at 1x. */
+    val durMs: Long by lazy { if (speed == 1f && curve == null) outMs - inMs else SpeedMath.outDur(outMs - inMs, speed, curve) }
+    fun srcToOut(srcOff: Long): Long = if (speed == 1f && curve == null) srcOff else SpeedMath.srcToOut(srcLenMs, speed, curve, srcOff)
+    fun outToSrc(outOff: Long): Long = if (speed == 1f && curve == null) outOff else SpeedMath.outToSrc(srcLenMs, speed, curve, outOff)
+    val hasSpeed: Boolean get() = speed != 1f || curve != null
+    val audioKept: Boolean get() = !still && !reversed && SpeedMath.audioKept(speed, curve)
+}
 
 data class AudioClip(
     val id: String, val uri: String, val name: String,
@@ -85,7 +101,7 @@ object TimelineOps {
     }
 
     /** Source position of the frame shown at timeline time [t]. */
-    fun sourcePos(tl: Timeline, t: Long): Pair<Int, Long>? = locate(tl, t)?.let { it.index to tl.video[it.index].inMs + it.offsetMs }
+    fun sourcePos(tl: Timeline, t: Long): Pair<Int, Long>? = locate(tl, t)?.let { val c = tl.video[it.index]; it.index to c.inMs + c.outToSrc(it.offsetMs) }
 
     // ---------------- add ----------------
     fun addVideo(tl: Timeline, uri: String, name: String, durMs: Long): Timeline =
@@ -111,8 +127,11 @@ object TimelineOps {
                 val c = tl.video[i]
                 val off = t - tl.videoStart(i)
                 if (off < MIN_CLIP_MS || c.durMs - off < MIN_CLIP_MS) return null
-                val left = c.copy(outMs = c.inMs + off)
-                val right = c.copy(id = idGen(), inMs = c.inMs + off)
+                val so = c.outToSrc(off)
+                if (so < 1 || so >= c.srcLenMs) return null
+                val xs = so.toFloat() / c.srcLenMs
+                val left = c.copy(outMs = c.inMs + so, curve = c.curve?.let { SpeedCurves.slice(it, 0f, xs) })
+                val right = c.copy(id = idGen(), inMs = c.inMs + so, curve = c.curve?.let { SpeedCurves.slice(it, xs, 1f) })
                 val v = tl.video.toMutableList().apply { set(i, left); add(i + 1, right) }
                 return tl.copy(video = v) to right.id
             }
@@ -165,7 +184,7 @@ object TimelineOps {
     /** Moves the LEFT edge by [deltaMs] (positive = shorter). Clamped to the source and MIN_CLIP_MS. */
     fun trimStart(tl: Timeline, id: String, deltaMs: Long): Timeline = when (tl.trackOf(id)) {
         Track.VIDEO -> tl.copy(video = tl.video.map {
-            if (it.id != id) it else it.copy(inMs = (it.inMs + deltaMs).coerceIn(0L, it.outMs - MIN_CLIP_MS))
+            if (it.id != id) it else it.copy(inMs = (it.inMs + srcDelta(it, deltaMs)).coerceIn(0L, it.outMs - MIN_CLIP_MS))
         })
         Track.AUDIO -> tl.copy(audio = tl.audio.map {
             if (it.id != id) it else {
@@ -184,7 +203,7 @@ object TimelineOps {
     /** Moves the RIGHT edge by [deltaMs] (positive = longer). */
     fun trimEnd(tl: Timeline, id: String, deltaMs: Long): Timeline = when (tl.trackOf(id)) {
         Track.VIDEO -> tl.copy(video = tl.video.map {
-            if (it.id != id) it else it.copy(outMs = (it.outMs + deltaMs).coerceIn(it.inMs + MIN_CLIP_MS, it.srcDurMs))
+            if (it.id != id) it else it.copy(outMs = (it.outMs + srcDelta(it, deltaMs)).coerceIn(it.inMs + MIN_CLIP_MS, it.srcDurMs))
         })
         Track.AUDIO -> tl.copy(audio = tl.audio.map {
             if (it.id != id) it else it.copy(outMs = (it.outMs + deltaMs).coerceIn(it.inMs + MIN_CLIP_MS, it.srcDurMs))
@@ -194,6 +213,74 @@ object TimelineOps {
         })
         null -> tl
     }
+
+    /** A trim drag is in timeline ms; a sped-up clip moves its source edge further. */
+    private fun srcDelta(c: VideoClip, deltaMs: Long): Long =
+        if (!c.hasSpeed) deltaMs else (deltaMs * SpeedMath.meanSpeed(c.srcLenMs, c.speed, c.curve)).roundToLong()
+
+    // ---------------- stage 2A: speed / freeze / reverse / look ----------------
+    /**
+     * Sets constant speed ([curve] null) or curve speed on video clip [id]. Captions move with the
+     * picture: inside the clip they keep pointing at the same source moment, after it they shift by
+     * the change in length.
+     */
+    fun setSpeed(tl: Timeline, id: String, speed: Float, curve: List<SpeedPt>?, curveName: String? = null): Timeline {
+        val i = tl.video.indexOfFirst { it.id == id }
+        if (i < 0) return tl
+        val old = tl.video[i]
+        if (old.still) return tl
+        val new = old.copy(speed = SpeedMath.clampSpeed(speed), curve = curve?.let { SpeedCurves.normalize(it) }, curveName = if (curve == null) null else curveName)
+        val start = tl.videoStart(i)
+        val nt = tl.copy(video = tl.video.toMutableList().apply { set(i, new) })
+        fun map(t: Long): Long = when {
+            t <= start -> t
+            t >= start + old.durMs -> t + (new.durMs - old.durMs)
+            else -> start + new.srcToOut(old.outToSrc(t - start))
+        }
+        return nt.copy(captions = remapCaptions(tl.captions, ::map))
+    }
+
+    /** Applies [map] to every caption and word time, keeping each caption at least MIN_CLIP_MS long. */
+    fun remapCaptions(caps: List<Caption>, map: (Long) -> Long): List<Caption> = caps.map { c ->
+        val s = map(c.startMs)
+        val e = max(s + MIN_CLIP_MS, map(c.endMs))
+        c.copy(startMs = s, endMs = e, words = c.words.map { w -> val ws = map(w.startMs); w.copy(startMs = ws, endMs = max(ws, map(w.endMs))) })
+    }.sortedBy { it.startMs }
+
+    /**
+     * Inserts a freeze-frame clip ([uri] = a short silent video of one frame) at timeline time [t],
+     * splitting the clip under [t] when needed. Captions after [t] move right by the freeze length.
+     * Returns the timeline and the new clip's id.
+     */
+    fun insertFreeze(tl: Timeline, t: Long, uri: String, name: String, lenMs: Long, fx: ClipFx = ClipFx()): Pair<Timeline, String> {
+        var base = tl
+        var index = tl.video.size
+        val loc = locate(tl, t)
+        if (loc != null) {
+            val c = tl.video[loc.index]
+            index = when {
+                loc.offsetMs <= 0 -> loc.index
+                loc.offsetMs >= c.durMs -> loc.index + 1
+                else -> split(tl, c.id, t)?.let { (st, _) -> base = st; loc.index + 1 } ?: (loc.index + 1)
+            }
+        }
+        val at = base.videoStart(index)
+        val clip = VideoClip(idGen(), uri, name, lenMs, 0, lenMs, volume = 0f, fx = fx, still = true)
+        val v = base.video.toMutableList().apply { add(index, clip) }
+        val caps = remapCaptions(base.captions) { x -> if (x >= at) x + lenMs else x }
+        return base.copy(video = v, captions = caps) to clip.id
+    }
+
+    /** Points clip [id] at its reversed copy ([uri], [lenMs] long = the old in..out range). Length and captions stay. */
+    fun replaceWithReversed(tl: Timeline, id: String, uri: String, lenMs: Long): Timeline = tl.copy(video = tl.video.map {
+        if (it.id != id) it
+        else it.copy(uri = uri, srcDurMs = lenMs, inMs = 0, outMs = lenMs, reversed = !it.reversed,
+            curve = it.curve?.let { c -> SpeedCurves.mirror(c) })
+    })
+
+    /** Sets the look of clip [id]; [all] copies it to every non-still clip as well. */
+    fun setFx(tl: Timeline, id: String, fx: ClipFx, all: Boolean = false): Timeline =
+        tl.copy(video = tl.video.map { if (it.id == id || (all && !it.still)) it.copy(fx = fx) else it })
 
     // ---------------- delete / duplicate / move ----------------
     fun delete(tl: Timeline, id: String): Timeline = tl.copy(
@@ -289,10 +376,16 @@ object Zoom {
 /** JSON (de)serialisation for Room autosave. */
 object TimelineJson {
     fun encode(tl: Timeline): String = JSONObject().apply {
-        put("v", 1)
+        put("v", 2)
         put("aspect", tl.aspect.name); put("fill", tl.fill); put("style", tl.styleId); put("lang", tl.captionLang)
         put("video", JSONArray().apply { tl.video.forEach { c -> put(JSONObject().apply {
             put("id", c.id); put("uri", c.uri); put("name", c.name); put("src", c.srcDurMs); put("in", c.inMs); put("out", c.outMs); put("vol", c.volume.toDouble())
+            if (c.speed != 1f) put("sp", c.speed.toDouble())
+            c.curve?.let { cv -> put("cv", JSONArray().apply { cv.forEach { p -> put(JSONArray().put(p.x.toDouble()).put(p.y.toDouble())) } }) }
+            c.curveName?.let { put("cvn", it) }
+            if (!c.fx.isNeutral || c.fx.lutPath != null) put("fx", FxJson.encode(c.fx))
+            if (c.still) put("still", true)
+            if (c.reversed) put("rev", true)
         }) } })
         put("audio", JSONArray().apply { tl.audio.forEach { c -> put(JSONObject().apply {
             put("id", c.id); put("uri", c.uri); put("name", c.name); put("src", c.srcDurMs); put("in", c.inMs); put("out", c.outMs); put("start", c.startMs); put("vol", c.volume.toDouble())
@@ -312,7 +405,12 @@ object TimelineJson {
             val c = o.optJSONArray("captions") ?: JSONArray()
             Timeline(
                 video = (0 until v.length()).map { i -> v.getJSONObject(i).let {
-                    VideoClip(it.getString("id"), it.getString("uri"), it.optString("name"), it.getLong("src"), it.getLong("in"), it.getLong("out"), it.optDouble("vol", 1.0).toFloat())
+                    VideoClip(it.getString("id"), it.getString("uri"), it.optString("name"), it.getLong("src"), it.getLong("in"), it.getLong("out"), it.optDouble("vol", 1.0).toFloat(),
+                        speed = SpeedMath.clampSpeed(it.optDouble("sp", 1.0).toFloat()),
+                        curve = it.optJSONArray("cv")?.let { cv -> SpeedCurves.normalize((0 until cv.length()).map { k -> cv.getJSONArray(k).let { p -> SpeedPt(p.getDouble(0).toFloat(), p.getDouble(1).toFloat()) } }) },
+                        curveName = if (it.has("cvn")) it.getString("cvn") else null,
+                        fx = it.optJSONObject("fx")?.let { f -> FxJson.decode(f) } ?: ClipFx(),
+                        still = it.optBoolean("still", false), reversed = it.optBoolean("rev", false))
                 } },
                 audio = (0 until a.length()).map { i -> a.getJSONObject(i).let {
                     AudioClip(it.getString("id"), it.getString("uri"), it.optString("name"), it.getLong("src"), it.getLong("in"), it.getLong("out"), it.getLong("start"), it.optDouble("vol", 1.0).toFloat())
@@ -328,5 +426,40 @@ object TimelineJson {
                 captionLang = o.optString("lang", "hi")
             )
         }.getOrDefault(Timeline())
+    }
+}
+
+/** JSON for a clip's look (only non-default values are written). */
+object FxJson {
+    fun encode(fx: ClipFx): JSONObject = JSONObject().apply {
+        if (fx.filterId != "none") put("f", fx.filterId)
+        if (fx.filterAmt != 1f) put("fa", fx.filterAmt.toDouble())
+        fx.lutPath?.let { put("lut", it) }
+        fx.lutName?.let { put("lutn", it) }
+        if (fx.lutAmt != 1f) put("la", fx.lutAmt.toDouble())
+        val a = fx.adjust
+        if (!a.isNeutral) put("adj", JSONObject().apply {
+            AdjustKey.entries.forEach { k -> val v = k.get(a); if (v != 0f) put(k.name.lowercase(), v.toDouble()) }
+            if (a.bandHue.any { it != 0f }) put("bh", JSONArray(a.bandHue.map { it.toDouble() }))
+            if (a.bandSat.any { it != 0f }) put("bs", JSONArray(a.bandSat.map { it.toDouble() }))
+            if (a.bandLight.any { it != 0f }) put("bl", JSONArray(a.bandLight.map { it.toDouble() }))
+        })
+    }
+
+    fun decode(o: JSONObject): ClipFx {
+        var a = Adjust()
+        o.optJSONObject("adj")?.let { j ->
+            AdjustKey.entries.forEach { k -> if (j.has(k.name.lowercase())) a = k.set(a, j.getDouble(k.name.lowercase()).toFloat()) }
+            fun bands(key: String): List<Float> = j.optJSONArray(key)?.let { arr -> List(HslBands.N) { i -> arr.optDouble(i, 0.0).toFloat().coerceIn(-1f, 1f) } } ?: Adjust.ZERO8
+            a = a.copy(bandHue = bands("bh"), bandSat = bands("bs"), bandLight = bands("bl"))
+        }
+        return ClipFx(
+            filterId = Filters.byId(o.optString("f", "none")).id,
+            filterAmt = o.optDouble("fa", 1.0).toFloat().coerceIn(0f, 1f),
+            lutPath = if (o.has("lut")) o.getString("lut") else null,
+            lutName = if (o.has("lutn")) o.getString("lutn") else null,
+            lutAmt = o.optDouble("la", 1.0).toFloat().coerceIn(0f, 1f),
+            adjust = a
+        )
     }
 }

@@ -1,9 +1,11 @@
-# Gopal Editor: every push to main -> signed release APK + GitHub Release + version.json
-# Secrets needed (repo -> Settings -> Secrets and variables -> Actions):
-#   KEYSTORE_BASE64   base64 of your release .jks (one line)
-#   KEYSTORE_PASSWORD keystore password
-#   KEY_ALIAS         key alias (e.g. gopaleditor)
-#   KEY_PASSWORD      key password (same as KEYSTORE_PASSWORD if you used the README command)
+# Gopal Editor: every push to main -> APK signed with the FIXED debug key in the repo
+# (app/debug.keystore) + GitHub Release + version.json, so the in-app Updates tab always works
+# and every build installs over the previous one without uninstalling.
+#
+# Optional: if you add these 4 secrets, a separately signed RELEASE apk is attached as well
+# (gopal-editor-release.apk). The Updates tab keeps using the debug-key apk.
+#   KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+# Keep this repo PRIVATE: anyone with app/debug.keystore can sign an "update" for this app.
 name: Release APK
 
 on:
@@ -34,47 +36,60 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Check signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      - name: Check the committed debug key
         run: |
-          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS; do
-            if [ -z "${!v}" ]; then echo "::error::Secret $v is missing. See README (GitHub Secrets)."; exit 1; fi
-          done
+          if [ ! -f app/debug.keystore ]; then
+            echo "::error::app/debug.keystore is missing. Create it (README: Termux keytool command) and commit it with: git add -f app/debug.keystore"
+            exit 1
+          fi
+          keytool -list -keystore app/debug.keystore -storepass android -alias androiddebugkey >/dev/null
 
       - name: Version numbers
         run: |
-          VC=$(( ${{ github.run_number }} + 1 ))          # versionCode: always increases
-          VN="1.0.${{ github.run_number }}"
+          VC=$(( ${{ github.run_number }} + 1 ))          # versionCode: run number + 1 (always increases, same as before)
+          VN="1.1.${{ github.run_number }}"
           echo "VERSION_CODE=$VC" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
           echo "TAG=v$VN" >> "$GITHUB_ENV"
           echo "Building $VN ($VC)"
 
-      - name: Build release APK (unsigned)
+      - name: Build debug APK (fixed key) + unit tests
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease testDebugUnitTest --tests 'com.gopal.editor.*Test' \
+          ./gradlew --no-daemon assembleDebug testDebugUnitTest --tests 'com.gopal.editor.*Test' \
             -PappVersionCode="$VERSION_CODE" -PappVersionName="$VERSION_NAME" \
             -PupdateRepo="${{ github.repository }}"
 
-      - name: Sign (v1 + v2 + v3) and verify
+      - name: Re-sign v1 + v2 + v3 with the same debug key, and verify
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" sign --ks app/debug.keystore --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out gopal-editor.apk app/build/outputs/apk/debug/app-debug.apk
+          "$BT/apksigner" verify -v --print-certs gopal-editor.apk
+
+      - name: Optional release-key APK (only if the secrets exist)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "No release secrets: skipping the release-key APK (the debug-key APK above is the one users install)."
+            exit 0
+          fi
+          ./gradlew --no-daemon assembleRelease \
+            -PappVersionCode="$VERSION_CODE" -PappVersionName="$VERSION_NAME" -PupdateRepo="${{ github.repository }}"
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           KP_VAR=KEY_PASSWORD; [ -z "$KEY_PASSWORD" ] && KP_VAR=KEYSTORE_PASSWORD
           "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" \
             --ks-pass env:KEYSTORE_PASSWORD --key-pass "env:$KP_VAR" \
             --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out gopal-editor.apk app/build/outputs/apk/release/app-release-unsigned.apk
-          "$BT/apksigner" verify -v --min-sdk-version 18 gopal-editor.apk
+            --out gopal-editor-release.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          "$BT/apksigner" verify gopal-editor-release.apk
           rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Write version.json
@@ -90,10 +105,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          FILES="gopal-editor.apk version.json"
+          [ -f gopal-editor-release.apk ] && FILES="$FILES gopal-editor-release.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" gopal-editor.apk version.json --clobber
+            gh release upload "$TAG" $FILES --clobber
           else
-            gh release create "$TAG" gopal-editor.apk version.json \
+            gh release create "$TAG" $FILES \
               --title "Gopal Editor $VERSION_NAME" --notes "$(git log -1 --pretty=%B)" --latest
           fi
 
@@ -101,5 +118,5 @@ jobs:
         with:
           name: gopal-editor-${{ env.VERSION_NAME }}
           path: |
-            gopal-editor.apk
+            gopal-editor*.apk
             version.json

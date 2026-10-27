@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class Panel { NONE, CAPTIONS, STYLE, ASPECT, VOLUME }
+enum class Panel { NONE, CAPTIONS, STYLE, ASPECT, VOLUME, FILTERS, ADJUST, SPEED }
 
 /** Everything the editor screen shows. Compose state, so the UI (and Paparazzi renders) read it directly. */
 class EditorState(val projectId: Long, name: String, tl: Timeline) {
@@ -50,6 +50,10 @@ class EditorState(val projectId: Long, name: String, tl: Timeline) {
     var mediaVersion by mutableIntStateOf(0)
     private val undoStack = ArrayDeque<Timeline>()
     val canUndo: Boolean get() = undoStack.isNotEmpty()
+
+    /** Clip the Filters / Adjust / Speed panels work on: the selected video clip, else the one under the playhead. */
+    val fxTarget: VideoClip?
+        get() = tl.video.firstOrNull { it.id == selected } ?: TimelineOps.locate(tl, playhead)?.let { tl.video[it.index] }
 
     fun edit(new: Timeline) {
         if (new == tl) return
@@ -108,6 +112,8 @@ class AppVm(app: Application) : AndroidViewModel(app) {
     private var exportJob: Job? = null
 
     val projects: StateFlow<List<ProjectEntity>> = db.projects().all().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val luts: StateFlow<List<LutEntity>> = db.luts().all().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    private var mediaJob: Job? = null
     val installedCode: Int = BuildConfig.VERSION_CODE
     val hasUpdate: Boolean get() = VersionCompare.isNewer(update.info, installedCode)
 
@@ -175,7 +181,7 @@ class AppVm(app: Application) : AndroidViewModel(app) {
         autosave?.cancel()
         autosave = viewModelScope.launch {
             snapshotFlow { ed.tl to ed.name }.drop(1).debounce(700).collect { (tl, name) ->
-                db.projects().upsert(p.copy(name = name, timelineJson = TimelineJson.encode(tl), durationMs = tl.durationMs, updatedAt = System.currentTimeMillis()))
+                db.projects().upsert(p.copy(name = name, timelineJson = TimelineJson.encode(tl), durationMs = tl.durationMs, updatedAt = System.currentTimeMillis(), fxVersion = 2))
             }
         }
     }
@@ -184,7 +190,7 @@ class AppVm(app: Application) : AndroidViewModel(app) {
         val ed = editor ?: return@launch
         autosave?.cancel()
         db.projects().get(ed.projectId)?.let { p ->
-            db.projects().upsert(p.copy(name = ed.name, timelineJson = TimelineJson.encode(ed.tl), durationMs = ed.tl.durationMs, updatedAt = System.currentTimeMillis()))
+            db.projects().upsert(p.copy(name = ed.name, timelineJson = TimelineJson.encode(ed.tl), durationMs = ed.tl.durationMs, updatedAt = System.currentTimeMillis(), fxVersion = 2))
         }
         editor = null
     }
@@ -205,6 +211,81 @@ class AppVm(app: Application) : AndroidViewModel(app) {
         if (d <= 0) { ed.note = L.t("Could not read that audio file", "यह ऑडियो फ़ाइल पढ़ी नहीं जा सकी"); return@launch }
         ed.edit(TimelineOps.addAudio(ed.tl, uri.toString(), displayName(uri), d, ed.playhead))
     }
+
+    // ---------------- stage 2A: LUT import, freeze frame, reverse ----------------
+    /** Copies a .cube file into the app, checks it parses, remembers it, and applies it to the current clip. */
+    fun importLut(uri: Uri) = viewModelScope.launch {
+        val ed = editor
+        try {
+            val name = displayName(uri).removeSuffix(".cube").removeSuffix(".CUBE")
+            val (file, lut) = withContext(Dispatchers.IO) {
+                val dir = File(ctx.filesDir, "luts").apply { mkdirs() }
+                val f = File(dir, "lut_${System.currentTimeMillis()}.cube")
+                (ctx.contentResolver.openInputStream(uri) ?: throw IllegalStateException("cannot open file")).use { ins -> f.outputStream().use { ins.copyTo(it) } }
+                val l = try { f.reader().use { CubeLut.parse(it) } } catch (e: Exception) { f.delete(); throw e }
+                LutCache.put(f.path, l)
+                f to l
+            }
+            db.luts().insert(LutEntity(name = name, path = file.path, size = lut.size))
+            if (ed != null) {
+                ed.fxTarget?.let { c -> ed.edit(TimelineOps.setFx(ed.tl, c.id, c.fx.copy(lutPath = file.path, lutName = name, lutAmt = 1f))) }
+                ed.note = L.t("LUT added: $name (${lut.size}³)", "LUT जुड़ा: $name (${lut.size}³)")
+            }
+        } catch (e: Exception) {
+            ed?.note = "❌ LUT: " + (e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    fun deleteLut(l: LutEntity) = viewModelScope.launch {
+        db.luts().delete(l.id)
+        withContext(Dispatchers.IO) { File(l.path).delete() }
+    }
+
+    /** Inserts an N-second still of the frame under the playhead (the still keeps that clip's look). */
+    fun freezeFrame(lenMs: Long) {
+        val ed = editor ?: return
+        val loc = TimelineOps.locate(ed.tl, ed.playhead) ?: return
+        val c = ed.tl.video[loc.index]
+        val srcMs = c.inMs + c.outToSrc(loc.offsetMs).coerceAtMost(c.srcLenMs - 1)
+        mediaJob = viewModelScope.launch {
+            try {
+                ed.busy = L.t("Making freeze frame…", "फ़्रीज़ फ़्रेम बन रहा है…"); ed.progress = 0f
+                val out = File(ctx.filesDir, "media/freeze_${System.currentTimeMillis()}.mp4").apply { parentFile?.mkdirs() }
+                FreezeMaker.make(ctx, Uri.parse(c.uri), srcMs, lenMs, out) { ed.progress = it / 100f }
+                val at = ed.playhead
+                val (t, id) = TimelineOps.insertFreeze(ed.tl, at, Uri.fromFile(out).toString(), L.t("Freeze", "फ़्रीज़"), lenMs, c.fx)
+                ed.edit(t); ed.selected = id
+            } catch (e: Exception) {
+                ed.note = "❌ " + L.t("Freeze frame failed: ", "फ़्रीज़ फ़्रेम नहीं बना: ") + (e.message ?: e.javaClass.simpleName)
+            } finally { ed.busy = null; ed.progress = -1f }
+        }
+    }
+
+    /** Reverses clip [id] with our own decode -> reverse -> encode pass (silent result, up to 60 s). */
+    fun reverseClip(id: String) {
+        val ed = editor ?: return
+        val c = ed.tl.video.firstOrNull { it.id == id } ?: return
+        if (c.still) { ed.note = L.t("A freeze frame looks the same reversed", "फ़्रीज़ फ़्रेम उल्टा भी वैसा ही दिखेगा"); return }
+        if (!ReverseRules.allowed(c.srcLenMs)) {
+            ed.note = L.t("Reverse works on clips up to ${ReverseRules.MAX_SRC_MS / 1000} s. Split the clip first.",
+                "रिवर्स ${ReverseRules.MAX_SRC_MS / 1000} सेकंड तक की क्लिप पर चलता है। पहले क्लिप स्प्लिट करें।")
+            return
+        }
+        mediaJob = viewModelScope.launch {
+            try {
+                ed.busy = L.t("Reversing… (the reversed clip is silent)", "रिवर्स हो रहा है… (उल्टी क्लिप में आवाज़ नहीं होगी)"); ed.progress = 0f
+                val out = File(ctx.filesDir, "media/reverse_${System.currentTimeMillis()}.mp4").apply { parentFile?.mkdirs() }
+                VideoReverser.reverse(ctx, Uri.parse(c.uri), c.inMs, c.outMs, out) { p -> viewModelScope.launch { ed.progress = p } }
+                ed.edit(TimelineOps.replaceWithReversed(ed.tl, id, Uri.fromFile(out).toString(), c.srcLenMs))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ed.note = "❌ " + L.t("Reverse failed: ", "रिवर्स नहीं हुआ: ") + (e.message ?: e.javaClass.simpleName)
+            } finally { ed.busy = null; ed.progress = -1f }
+        }
+    }
+
+    fun cancelMediaJob() { mediaJob?.cancel() }
 
     // ---------------- auto captions ----------------
     /** mode: "hi" | "en" | "hinglish" */

@@ -22,10 +22,25 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // Stage 2A: a FIXED debug key committed in the repo (app/debug.keystore), so every debug build
+    // (yours on GitHub Actions, or local) has the same signature and updates install over each other.
+    // Anyone who has this file can sign an update for this package: keep the repo private.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     // Release APKs are built UNSIGNED here and signed afterwards with apksigner (v1+v2+v3),
     // because AGP skips the v1 (JAR) signature when minSdk >= 24 and some MIUI/HyperOS
     // installers still look for it. See README / .github/workflows/release.yml.
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             isDebuggable = false
@@ -83,4 +98,5 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")   // real org.json on the JVM (android.jar has stubs)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.xerial:sqlite-jdbc:3.46.1.3")   // Room migration test on the JVM (real SQLite)
 }
