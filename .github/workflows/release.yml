@@ -1,9 +1,5 @@
-# Gopal Editor: every push to main -> signed release APK + GitHub Release + version.json
-# Secrets needed (repo -> Settings -> Secrets and variables -> Actions):
-#   KEYSTORE_BASE64   base64 of your release .jks (one line)
-#   KEYSTORE_PASSWORD keystore password
-#   KEY_ALIAS         key alias (e.g. gopaleditor)
-#   KEY_PASSWORD      key password (same as KEYSTORE_PASSWORD if you used the README command)
+# Gopal Editor: हर push पर debug APK + GitHub Release + version.json
+# कोई secret नहीं चाहिए (signing बाद में जोड़ेंगे)
 name: Release APK
 
 on:
@@ -12,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # create releases + upload assets
+  contents: write
 
 concurrency:
   group: release
@@ -34,48 +30,24 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Check signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS; do
-            if [ -z "${!v}" ]; then echo "::error::Secret $v is missing. See README (GitHub Secrets)."; exit 1; fi
-          done
-
       - name: Version numbers
         run: |
-          VC=$(( ${{ github.run_number }} + 1 ))          # versionCode: always increases
+          VC=$(( ${{ github.run_number }} + 1 ))
           VN="1.0.${{ github.run_number }}"
           echo "VERSION_CODE=$VC" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
           echo "TAG=v$VN" >> "$GITHUB_ENV"
           echo "Building $VN ($VC)"
 
-      - name: Build release APK (unsigned)
+      - name: Build debug APK
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease testDebugUnitTest --tests 'com.gopal.editor.*Test' \
+          ./gradlew --no-daemon assembleDebug \
             -PappVersionCode="$VERSION_CODE" -PappVersionName="$VERSION_NAME" \
             -PupdateRepo="${{ github.repository }}"
 
-      - name: Sign (v1 + v2 + v3) and verify
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          KP_VAR=KEY_PASSWORD; [ -z "$KEY_PASSWORD" ] && KP_VAR=KEYSTORE_PASSWORD
-          "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:KEYSTORE_PASSWORD --key-pass "env:$KP_VAR" \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out gopal-editor.apk app/build/outputs/apk/release/app-release-unsigned.apk
-          "$BT/apksigner" verify -v --min-sdk-version 18 gopal-editor.apk
-          rm -f "$RUNNER_TEMP/release.jks"
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk gopal-editor.apk
 
       - name: Write version.json
         run: |
