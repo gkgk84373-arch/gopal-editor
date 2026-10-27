@@ -105,4 +105,12 @@ class AppPrefs(c: Context) {
     var lastSeenUpdate: Int
         get() = p.getInt("last_seen_update", 0)
         set(v) { p.edit().putInt("last_seen_update", v).apply() }
+    // ---- Free AI (not secret: no keys here; keys stay in KeyVault) ----
+    var freeMode: Boolean
+        get() = p.getBoolean("free_mode", true)
+        set(v) { p.edit().putBoolean("free_mode", v).apply() }
+    /** "" = use the default derived from the Updates repo. */
+    var providersUrl: String
+        get() = p.getString("providers_url", "") ?: ""
+        set(v) { p.edit().putString("providers_url", v.trim()).apply() }
 }

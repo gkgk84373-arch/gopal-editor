@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "_comment": "Gopal Editor Free AI provider list. Edit freely: the app reloads it on start. Fields: name, type (openai | gemini | image-get), url, model, needsKey, keyFrom (GROQ | GEMINI | OPENROUTER | OPENAI | HUGGINGFACE | CUSTOM), capabilities (text | image), priority (lower first), minIntervalMs (gap between calls), timeoutMs. image-get url placeholders: {prompt} {width} {height} {seed} {model}. NEVER put an API key in this file.",
+  "providers": [
+    {
+      "name": "Pollinations Text",
+      "type": "openai",
+      "url": "https://text.pollinations.ai/openai",
+      "model": "openai",
+      "needsKey": false,
+      "capabilities": [
+        "text"
+      ],
+      "priority": 10,
+      "minIntervalMs": 3000,
+      "timeoutMs": 60000,
+      "note": "No key. OpenAI-compatible."
+    },
+    {
+      "name": "Pollinations Image",
+      "type": "image-get",
+      "url": "https://image.pollinations.ai/prompt/{prompt}?width={width}&height={height}&seed={seed}&nologo=true",
+      "model": "",
+      "needsKey": false,
+      "capabilities": [
+        "image"
+      ],
+      "priority": 10,
+      "minIntervalMs": 45000,
+      "timeoutMs": 90000,
+      "note": "No key. Free tier: 1 image every 45 s per IP."
+    },
+    {
+      "name": "Groq (free key)",
+      "type": "openai",
+      "url": "https://api.groq.com/openai/v1/chat/completions",
+      "model": "llama-3.3-70b-versatile",
+      "needsKey": true,
+      "keyFrom": "GROQ",
+      "capabilities": [
+        "text"
+      ],
+      "priority": 20,
+      "minIntervalMs": 2000,
+      "timeoutMs": 45000,
+      "note": "Free key: console.groq.com/keys"
+    },
+    {
+      "name": "Google Gemini (free key)",
+      "type": "gemini",
+      "url": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-2.5-flash",
+      "needsKey": true,
+      "keyFrom": "GEMINI",
+      "capabilities": [
+        "text"
+      ],
+      "priority": 30,
+      "minIntervalMs": 6000,
+      "timeoutMs": 60000,
+      "note": "Free key: aistudio.google.com/apikey"
+    },
+    {
+      "name": "OpenRouter (free model)",
+      "type": "openai",
+      "url": "https://openrouter.ai/api/v1/chat/completions",
+      "model": "google/gemma-4-31b-it:free",
+      "needsKey": true,
+      "keyFrom": "OPENROUTER",
+      "capabilities": [
+        "text"
+      ],
+      "priority": 40,
+      "minIntervalMs": 4000,
+      "timeoutMs": 60000,
+      "note": "Free key: openrouter.ai/keys. Free models (\":free\") change often: edit model here."
+    }
+  ]
+}

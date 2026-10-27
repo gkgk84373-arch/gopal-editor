@@ -1,0 +1,11 @@
+<resources>
+    <!-- Android 12+ system splash: Gk's photo on the same dark navy as the icon. -->
+    <style name="Theme.GopalEditor" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/brand_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">#FF16161B</item>
+        <item name="android:windowSplashScreenBackground">@color/brand_dark</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_dark</item>
+    </style>
+</resources>

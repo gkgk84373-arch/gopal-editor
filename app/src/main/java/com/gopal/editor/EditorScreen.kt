@@ -76,7 +76,18 @@ class EditorActions(
     val onImportLut: () -> Unit = {},
     val onFreeze: (Long) -> Unit = {},
     val onReverse: (String) -> Unit = {},
-    val onLookChanged: () -> Unit = {}
+    val onLookChanged: () -> Unit = {},
+    // ---- Free AI ----
+    val ai: EditorAiActions = EditorAiActions()
+)
+
+class EditorAiActions(
+    val onTranslate: (String) -> Unit = {},
+    val onFixCaptions: () -> Unit = {},
+    val onApplyProposal: (Set<Int>) -> Unit = {},
+    val onDiscardProposal: () -> Unit = {},
+    val onGenImage: (String, Boolean) -> Unit = { _, _ -> },
+    val onAddImage: (Long) -> Unit = {}
 )
 
 @Composable
@@ -156,8 +167,10 @@ fun EditorScreen(
             Panel.FILTERS -> FiltersPanel(ed, actions.luts, actions.onImportLut)
             Panel.ADJUST -> AdjustPanel(ed)
             Panel.SPEED -> SpeedPanel(ed, actions.onFreeze, actions.onReverse)
+            Panel.AI_IMAGE -> AiImagePanel(ed, actions.ai.onGenImage, actions.ai.onAddImage)
             Panel.NONE -> Toolbar(ed, actions)
         }
+        ed.captionProposal?.let { p -> CaptionProposalDialog(p, actions.ai.onApplyProposal, actions.ai.onDiscardProposal) }
     }
 }
 
@@ -202,6 +215,7 @@ private fun Toolbar(ed: EditorState, a: EditorActions) {
             }
             ToolButton(GI.Sparkle, L.t("Style", "स्टाइल")) { ed.panel = Panel.STYLE }
             ToolButton(GI.Aspect, L.t("Ratio", "रेशियो")) { ed.panel = Panel.ASPECT }
+            ToolButton(GI.Sparkle, L.t("AI image", "AI इमेज"), tint = G.Accent) { ed.panel = Panel.AI_IMAGE }
         }
     }
     editing?.let { c -> TextEditDialog(c.text, onDismiss = { editing = null }) { txt -> ed.edit(TimelineOps.setCaptionText(ed.tl, c.id, txt)); editing = null } }
@@ -243,7 +257,7 @@ internal fun PanelFrame(title: String, ed: EditorState, height: Int = 280, conte
 private fun CaptionsPanel(ed: EditorState, a: EditorActions) {
     var mode by remember { mutableStateOf(ed.tl.captionLang.takeIf { it in listOf("hi", "en", "hinglish") } ?: "hi") }
     var editing by remember { mutableStateOf<Caption?>(null) }
-    PanelFrame(L.t("Auto Captions", "ऑटो कैप्शन"), ed, 300) {
+    PanelFrame(L.t("Auto Captions", "ऑटो कैप्शन"), ed, 340) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip2("हिंदी", mode == "hi") { mode = "hi" }
             Chip2("English", mode == "en") { mode = "en" }
@@ -254,6 +268,7 @@ private fun CaptionsPanel(ed: EditorState, a: EditorActions) {
         Spacer(Modifier.height(8.dp))
         PrimaryButton(if (ed.tl.captions.isEmpty()) L.t("Generate captions", "कैप्शन बनाएँ") else L.t("Re-generate (replaces list)", "फिर से बनाएँ (लिस्ट बदलेगी)"),
             Modifier.fillMaxWidth(), enabled = ed.busy == null && ed.tl.video.isNotEmpty(), icon = GI.Sparkle) { a.onAutoCaptions(mode) }
+        if (ed.tl.captions.isNotEmpty()) { Spacer(Modifier.height(6.dp)); CaptionAiRow(ed, a.ai.onTranslate, a.ai.onFixCaptions) }
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
             itemsIndexed(ed.tl.captions, key = { _, c -> c.id }) { _, c ->

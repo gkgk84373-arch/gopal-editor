@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class Panel { NONE, CAPTIONS, STYLE, ASPECT, VOLUME, FILTERS, ADJUST, SPEED }
+enum class Panel { NONE, CAPTIONS, STYLE, ASPECT, VOLUME, FILTERS, ADJUST, SPEED, AI_IMAGE }
 
 /** Everything the editor screen shows. Compose state, so the UI (and Paparazzi renders) read it directly. */
 class EditorState(val projectId: Long, name: String, tl: Timeline) {
@@ -48,6 +48,10 @@ class EditorState(val projectId: Long, name: String, tl: Timeline) {
     var note by mutableStateOf<String?>(null)
     /** Bumped whenever the clip list changes so the preview player rebuilds its playlist. */
     var mediaVersion by mutableIntStateOf(0)
+    // ---- Free AI ----
+    /** Translate / language-fix result waiting for the user's OK (preview before applying). */
+    var captionProposal by mutableStateOf<CaptionProposal?>(null)
+    var aiImage by mutableStateOf(AiImageUi())
     private val undoStack = ArrayDeque<Timeline>()
     val canUndo: Boolean get() = undoStack.isNotEmpty()
 
@@ -80,6 +84,32 @@ class EditorState(val projectId: Long, name: String, tl: Timeline) {
         if (selected != null && tl.trackOf(selected!!) == null) selected = null
     }
 }
+
+data class CaptionProposal(val title: String, val lines: List<String>, val changes: List<CaptionAi.Change>, val via: String)
+data class AiImageUi(val busy: Boolean = false, val file: File? = null, val sticker: Boolean = false, val prompt: String = "", val via: String = "", val error: String? = null)
+
+/** State of the AI tab tools (Script Writer, Hook/Title/Hashtags). */
+class AiToolState {
+    var topic by mutableStateOf("")
+    var lang by mutableStateOf("hi")
+    var seconds by mutableIntStateOf(30)
+    var tone by mutableStateOf("")
+    var script by mutableStateOf("")
+    var ideas by mutableStateOf<HookIdeas?>(null)
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var via by mutableStateOf("")
+}
+
+data class FreeAiUi(
+    val freeMode: Boolean = true,
+    val url: String = "",
+    val defaultUrl: String = "",
+    val providers: List<FreeProvider> = emptyList(),
+    val source: ProviderListChooser.Source = ProviderListChooser.Source.BUNDLED,
+    val loading: Boolean = false,
+    val fetchError: String? = null
+)
 
 data class UpdateUi(
     val checking: Boolean = false,
@@ -117,9 +147,133 @@ class AppVm(app: Application) : AndroidViewModel(app) {
     val installedCode: Int = BuildConfig.VERSION_CODE
     val hasUpdate: Boolean get() = VersionCompare.isNewer(update.info, installedCode)
 
+    // ---------------- Free AI ----------------
+    private val freeHttp = OkFreeHttp(ai.http)
+    private val limiter = RateLimiter()
+    private val providersRepo = ProvidersRepo(app, ai.http)
+    var free by mutableStateOf(FreeAiUi(freeMode = prefs.freeMode, url = prefs.providersUrl, defaultUrl = ProviderListChooser.defaultUrl(UpdateConfig.REPO)))
+    val tools = AiToolState()
+    private fun router() = FreeAiRouter(free.providers, keys.toList(), free.freeMode, freeHttp, limiter)
+    private fun via(r: FreeResult<*>) = r.used.label + if (r.attempts.isEmpty()) "" else
+        " (" + L.t("after ", "पहले फेल: ") + r.attempts.joinToString { it.candidate.provider.name } + ")"
+
     init {
         L.lang = prefs.lang
         if (UpdateConfig.isConfigured) checkUpdate()
+        free = free.copy(providers = ProvidersJson.parse(providersRepo.cached() ?: providersRepo.bundled()).providers)
+        reloadProviders()
+    }
+
+    fun setFreeMode(on: Boolean) { prefs.freeMode = on; free = free.copy(freeMode = on) }
+    fun setProvidersUrl(u: String) { prefs.providersUrl = u; free = free.copy(url = u.trim()); reloadProviders() }
+    fun reloadProviders() = viewModelScope.launch {
+        free = free.copy(loading = true)
+        val url = free.url.ifBlank { free.defaultUrl }
+        val r = providersRepo.load(url)
+        free = free.copy(loading = false, providers = r.choice.providers, source = r.choice.source, fetchError = r.fetchError)
+    }
+
+    fun writeScript() = viewModelScope.launch {
+        if (tools.topic.isBlank() || tools.busy) return@launch
+        tools.busy = true; tools.error = null
+        try {
+            val r = router().text(ScriptWriter.prompt(tools.topic, tools.lang, tools.seconds, tools.tone), ScriptWriter.system(tools.lang), 1800)
+            tools.script = ScriptWriter.clean(r.value); tools.via = via(r)
+        } catch (e: Exception) { tools.error = e.message } finally { tools.busy = false }
+    }
+
+    fun suggestIdeas() = viewModelScope.launch {
+        if (tools.busy) return@launch
+        val caps = editor?.tl?.captions?.map { it.text }.orEmpty()
+        if (tools.topic.isBlank() && caps.isEmpty()) { tools.error = L.t("Write the topic first", "पहले टॉपिक लिखें"); return@launch }
+        tools.busy = true; tools.error = null
+        try {
+            val r = router().text(HookIdeas.prompt(tools.topic, caps, tools.lang), null, 1500)
+            val ideas = HookIdeas.parse(r.value)
+            if (ideas.isEmpty) throw IllegalStateException(L.t("The AI reply could not be read. Try again.", "AI का जवाब समझ नहीं आया। फिर कोशिश करें।"))
+            tools.ideas = ideas; tools.via = via(r)
+        } catch (e: Exception) { tools.error = e.message } finally { tools.busy = false }
+    }
+
+    /** kind: "translate" (target = language name) or "fix". The result is a preview; nothing changes until applyProposal(). */
+    fun captionAi(kind: String, target: String = "") = viewModelScope.launch {
+        val ed = editor ?: return@launch
+        val caps = ed.tl.captions
+        if (caps.isEmpty()) { ed.note = L.t("No captions yet. Generate or add captions first.", "अभी कोई कैप्शन नहीं है। पहले कैप्शन बनाएँ।"); return@launch }
+        if (ed.busy != null) return@launch
+        try {
+            ed.busy = if (kind == "fix") L.t("Fixing caption language…", "कैप्शन की भाषा सुधारी जा रही है…") else L.t("Translating captions…", "कैप्शन ट्रांसलेट हो रहे हैं…")
+            val lines = caps.map { it.text }
+            val out = lines.toMutableList()
+            val used = LinkedHashSet<String>()
+            val chunks = CaptionAi.chunks(lines)
+            chunks.forEachIndexed { n, range ->
+                val part = lines.subList(range.first, range.last + 1)
+                val prompt = if (kind == "fix") CaptionAi.fixPrompt(part) else CaptionAi.translatePrompt(part, target)
+                val r = router().text(prompt, null, 4096)
+                Romanizer.parse(r.value, part).forEachIndexed { i, t -> out[range.first + i] = t }
+                used += via(r)
+                ed.progress = (n + 1f) / chunks.size
+            }
+            val title = if (kind == "fix") L.t("Language fix", "भाषा सुधार") else L.t("Translate → ", "ट्रांसलेट → ") + target
+            ed.captionProposal = CaptionProposal(title, out, CaptionAi.diff(caps, out), used.joinToString(" · "))
+        } catch (e: Exception) {
+            ed.note = "❌ " + (e.message ?: e.javaClass.simpleName)
+        } finally { ed.busy = null; ed.progress = -1f }
+    }
+
+    fun applyProposal(accepted: Set<Int>? = null) {
+        val ed = editor ?: return
+        val p = ed.captionProposal ?: return
+        val caps = ed.tl.captions
+        val lines = caps.mapIndexed { i, c -> if (accepted == null || i in accepted) p.lines.getOrNull(i) ?: c.text else c.text }
+        ed.edit(ed.tl.copy(captions = CaptionAi.apply(caps, lines)))
+        ed.captionProposal = null
+    }
+    fun discardProposal() { editor?.captionProposal = null }
+
+    fun generateImage(prompt: String, sticker: Boolean) = viewModelScope.launch {
+        val ed = editor ?: return@launch
+        if (prompt.isBlank() || ed.aiImage.busy) return@launch
+        ed.aiImage = AiImageUi(busy = true, sticker = sticker, prompt = prompt)
+        try {
+            val (w, h) = AiImageSize.forAspect(ed.tl.aspect, sticker)
+            val r = router().image(AiImageSize.prompt(prompt, sticker), w, h, (System.currentTimeMillis() % 100000).toInt())
+            val f = withContext(Dispatchers.IO) {
+                File(ctx.filesDir, "media/ai_img_${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs(); writeBytes(r.value) }
+            }
+            ed.aiImage = AiImageUi(file = f, sticker = sticker, prompt = prompt, via = via(r))
+        } catch (e: Exception) {
+            ed.aiImage = AiImageUi(sticker = sticker, prompt = prompt, error = e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    /** Adds the generated picture at the playhead as an N-second image clip (no sticker/overlay track exists yet). */
+    fun addAiImage(lenMs: Long) {
+        val ed = editor ?: return
+        val img = ed.aiImage.file ?: return
+        mediaJob = viewModelScope.launch {
+            try {
+                ed.busy = L.t("Adding the image to the timeline…", "इमेज टाइमलाइन में जोड़ी जा रही है…"); ed.progress = 0f
+                val bmp = withContext(Dispatchers.IO) { android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { android.graphics.BitmapFactory.decodeFile(img.path, it) } }
+                val w = if (bmp.outWidth > 0) bmp.outWidth else 720; val h = if (bmp.outHeight > 0) bmp.outHeight else 1280
+                val mime = if (bmp.outMimeType == "image/png") androidx.media3.common.MimeTypes.IMAGE_PNG else androidx.media3.common.MimeTypes.IMAGE_JPEG
+                val out = File(ctx.filesDir, "media/ai_clip_${System.currentTimeMillis()}.mp4")
+                ImageClipMaker.make(ctx, img, mime, lenMs, w, h, out) { p -> ed.progress = p / 100f }
+                val name = if (ed.aiImage.sticker) L.t("AI sticker", "AI स्टिकर") else L.t("AI background", "AI बैकग्राउंड")
+                val (t, id) = TimelineOps.insertFreeze(ed.tl, ed.playhead, Uri.fromFile(out).toString(), name, lenMs)
+                ed.edit(t); ed.selected = id
+                ed.note = if (ed.aiImage.sticker) L.t("Added as an image clip at the playhead (there is no sticker/overlay track yet).",
+                    "प्लेहेड पर इमेज क्लिप की तरह जोड़ा (स्टिकर/ओवरले ट्रैक अभी नहीं है)।")
+                else L.t("AI background added as an image clip at the playhead.", "AI बैकग्राउंड प्लेहेड पर इमेज क्लिप की तरह जुड़ गया।")
+                ed.aiImage = AiImageUi()
+                ed.panel = Panel.NONE
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ed.note = "❌ " + L.t("Could not add the image: ", "इमेज नहीं जुड़ी: ") + (e.message ?: e.javaClass.simpleName)
+            } finally { ed.busy = null; ed.progress = -1f }
+        }
     }
 
     fun setLang(l: String) { L.lang = l; prefs.lang = l }

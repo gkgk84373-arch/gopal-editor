@@ -1,0 +1,4 @@
+<resources>
+    <!-- Gopal Editor brand: dark navy behind the photo (launcher icon + splash) -->
+    <color name="brand_dark">#FF0B1A30</color>
+</resources>

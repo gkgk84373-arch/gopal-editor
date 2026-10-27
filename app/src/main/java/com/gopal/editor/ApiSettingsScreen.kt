@@ -79,12 +79,22 @@ fun ApiSettingsScreen(
     onDone: () -> Unit,
     onBack: (() -> Unit)?,
     initialDraft: KeyDraft? = null,
-    initialShowKey: Boolean = false
+    initialShowKey: Boolean = false,
+    // ---- Free AI (null = card hidden, e.g. older screenshots) ----
+    free: FreeAiUi? = null,
+    onFreeMode: (Boolean) -> Unit = {},
+    onProvidersUrl: (String) -> Unit = {},
+    onReloadProviders: () -> Unit = {}
 ) {
     var draft by remember { mutableStateOf(initialDraft ?: KeyDraft()) }
     Column(Modifier.fillMaxSize().background(G.Bg)) {
         TopBar(L.t("API Settings", "API सेटिंग्स"), L.t("Your own AI keys · no server", "आपकी अपनी AI keys · कोई सर्वर नहीं"), onBack) { LangToggle(onLang); Spacer(Modifier.width(8.dp)) }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+            if (free != null) {
+                FreeModeCard(free, keys.filter { it.enabled && it.key.isNotBlank() }.map { it.type }.toSet(), onFreeMode, onProvidersUrl, onReloadProviders,
+                    onAddKeyFor = { p -> p.keyType?.let { t -> draft = KeyDraft().apply { type = t; model = p.model } } })
+                Spacer(Modifier.height(12.dp))
+            }
             if (firstLaunch) {
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(G.Grad).padding(16.dp)) {
                     Column {
@@ -127,7 +137,7 @@ fun ApiSettingsScreen(
         if (firstLaunch) {
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 GhostButton(L.t("Skip for now", "अभी नहीं"), Modifier.weight(1f), onClick = onDone)
-                PrimaryButton(L.t("Continue", "आगे बढ़ें"), Modifier.weight(1f), enabled = keys.isNotEmpty(), onClick = onDone)
+                PrimaryButton(L.t("Continue", "आगे बढ़ें"), Modifier.weight(1f), enabled = keys.isNotEmpty() || free?.freeMode == true, onClick = onDone)
             }
         }
     }

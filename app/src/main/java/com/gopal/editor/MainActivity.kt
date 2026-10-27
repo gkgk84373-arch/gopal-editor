@@ -37,7 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
-enum class Route { MAIN, API, EDITOR, EXPORT }
+enum class Route { MAIN, API, EDITOR, EXPORT, SCRIPT, IDEAS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppVm by viewModels()
@@ -71,7 +71,8 @@ fun App(vm: AppVm) {
         Box(safe) {
             ApiSettingsScreen(vm.keys, vm.keyTest, vm.keyTesting, firstLaunch = true, encrypted = vm.vaultEncrypted,
                 onSave = vm::saveKey, onDelete = vm::deleteKey, onMove = vm::moveKey, onTest = { vm.testKey(it) },
-                onLang = vm::setLang, onDone = vm::finishSetup, onBack = null)
+                onLang = vm::setLang, onDone = vm::finishSetup, onBack = null,
+                free = vm.free, onFreeMode = vm::setFreeMode, onProvidersUrl = vm::setProvidersUrl, onReloadProviders = { vm.reloadProviders() })
         }
         return
     }
@@ -82,8 +83,17 @@ fun App(vm: AppVm) {
             Box(safe) {
                 ApiSettingsScreen(vm.keys, vm.keyTest, vm.keyTesting, firstLaunch = false, encrypted = vm.vaultEncrypted,
                     onSave = vm::saveKey, onDelete = vm::deleteKey, onMove = vm::moveKey, onTest = { vm.testKey(it) },
-                    onLang = vm::setLang, onDone = {}, onBack = { route = if (vm.editor != null) Route.EDITOR else Route.MAIN })
+                    onLang = vm::setLang, onDone = {}, onBack = { route = if (vm.editor != null) Route.EDITOR else Route.MAIN },
+                    free = vm.free, onFreeMode = vm::setFreeMode, onProvidersUrl = vm::setProvidersUrl, onReloadProviders = { vm.reloadProviders() })
             }
+        }
+        Route.SCRIPT -> {
+            BackHandler { route = Route.MAIN }
+            Box(safe) { ScriptWriterScreen(vm.tools, vm.free.freeMode, onGenerate = { vm.writeScript() }, onApi = { route = Route.API }, onBack = { route = Route.MAIN }) }
+        }
+        Route.IDEAS -> {
+            BackHandler { route = Route.MAIN }
+            Box(safe) { IdeasScreen(vm.tools, vm.editor?.tl?.captions?.isNotEmpty() == true, onGenerate = { vm.suggestIdeas() }, onApi = { route = Route.API }, onBack = { route = Route.MAIN }) }
         }
         Route.EDITOR -> {
             val ed = vm.editor
@@ -126,7 +136,8 @@ fun App(vm: AppVm) {
                     MainTab.HOME -> HomeScreen(projects, vm.keys.size, onApi = { route = Route.API }, onNew = { pickNew.launch(arrayOf("video/*")) },
                         onOpen = { vm.open(it) }, onAllProjects = { tab = MainTab.PROJECTS }, thumb = thumb)
                     MainTab.PROJECTS -> ProjectsScreen(projects, onOpen = { vm.open(it) }, onDelete = vm::deleteProject, onNew = { pickNew.launch(arrayOf("video/*")) }, thumb = thumb)
-                    MainTab.AI -> AiScreen(vm.keys.size, onApi = { route = Route.API }, onNew = { pickNew.launch(arrayOf("video/*")) })
+                    MainTab.AI -> AiScreen(vm.keys.size, onApi = { route = Route.API }, onNew = { pickNew.launch(arrayOf("video/*")) },
+                        freeMode = vm.free.freeMode, onScript = { route = Route.SCRIPT }, onIdeas = { route = Route.IDEAS })
                     MainTab.UPDATES -> UpdatesScreen(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, UpdateConfig.REPO, vm.update, vm.hasUpdate,
                         onCheck = { vm.checkUpdate() }, onUpdate = { vm.downloadUpdate() }, onInstall = vm::installUpdate)
                     MainTab.SETTINGS -> SettingsScreen(vm.keys.size, BuildConfig.VERSION_NAME, onApi = { route = Route.API }, onLang = vm::setLang)
@@ -166,7 +177,12 @@ private fun EditorRoute(
             onAutoCaptions = { vm.autoCaptions(it) }, onPlayPause = pc::playPause, onSeek = pc::seekTo, onApi = onApi,
             luts = luts, onImportLut = onImportLut,
             onFreeze = { pc.player.pause(); vm.freezeFrame(it) },
-            onReverse = { pc.player.pause(); vm.reverseClip(it) }
+            onReverse = { pc.player.pause(); vm.reverseClip(it) },
+            ai = EditorAiActions(
+                onTranslate = { vm.captionAi("translate", it) }, onFixCaptions = { vm.captionAi("fix") },
+                onApplyProposal = { vm.applyProposal(it) }, onDiscardProposal = vm::discardProposal,
+                onGenImage = { p, s -> vm.generateImage(p, s) }, onAddImage = { pc.player.pause(); vm.addAiImage(it) }
+            )
         ), thumbs) { PlayerSurface(pc.player, ed.tl.fill) }
     }
 }

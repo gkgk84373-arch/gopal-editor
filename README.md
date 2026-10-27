@@ -183,3 +183,22 @@ git add -A && git commit -m "Stage 2A" && git push
 - Speed: 0.1x–100x, curve speed (drag points, tap to add, long-press to remove; presets Montage, Hero, Bullet, Jump cut, Flash in, Flash out), freeze frame (1/2/3/5 s), reverse (own MediaCodec pass, clips up to 60 s, result is silent).
 - Sound with speed: kept with pitch preserved from 0.25x to 4x; muted outside that and on curves. Preview plays at most 8x (export uses the exact speed).
 - Captions follow speed changes and freeze frames. Projects migrate from v1 automatically (Room v1→v2).
+
+
+## Free AI (बिना key) — providers.json
+
+**हिंदी**
+- API Settings में सबसे ऊपर **"Free mode (बिना key)"** स्विच है (डिफ़ॉल्ट: चालू)। चालू होने पर बिना key वाले प्रोवाइडर (Pollinations: टेक्स्ट + इमेज) चलते हैं। आपकी अपनी key (Groq / Gemini / OpenRouter / OpenAI…) डली हो तो **वही पहले** चलती है।
+- प्रोवाइडर की लिस्ट ऐप में पक्की नहीं है: वह `providers.json` से आती है। ऐप खुलते ही उसे डाउनलोड करता है; नेट न हो तो आख़िरी सेव कॉपी, और वह भी न हो तो ऐप में रखी छोटी लिस्ट (`app/src/main/assets/providers_default.json`) चलती है। गलत entry छोड़ दी जाती है, ऐप crash नहीं होता।
+- ⚠️ **ज़रूरी:** आपका repo प्राइवेट है (उसमें debug.keystore है)। प्राइवेट repo की फ़ाइल ऐप **नहीं पढ़ सकता**। इसलिए `providers.json` को किसी **public repo या GitHub gist** में रखें और उसका *raw* लिंक API Settings → Free mode → "providers.json का URL" में डालें। URL खाली हो तो ऐप `https://raw.githubusercontent.com/<updateRepo>/main/providers.json` आज़माता है (यह सिर्फ़ तब चलेगा जब वह repo public हो); नहीं तो सेव/बिल्ट-इन लिस्ट चलेगी।
+- Gist बनाने का तरीका: gist.github.com → फ़ाइल का नाम `providers.json` → इस repo की `providers.json` पेस्ट करें → "Create public gist" → "Raw" दबाएँ → वह लिंक ऐप में डालें।
+- Auto-fallback: कोई प्रोवाइडर फेल हो, लिमिट (429) आए या देर करे (timeout), तो अगला अपने आप चलता है। हर प्रोवाइडर के लिए दो requests के बीच कम से कम `minIntervalMs` का गैप रहता है, और 429 पर `Retry-After` तक वह रुका रहता है। सब फेल हों तो सरल हिंदी में बताया जाता है।
+- **providers.json में कभी कोई API key न डालें।** Keys सिर्फ़ फ़ोन के encrypted storage में रहती हैं।
+
+**English**
+- "Free mode (no key)" switch at the top of API Settings (default ON). Keyless providers (Pollinations text + image) run when it's on; any provider you have your own key for goes first.
+- The provider list comes from `providers.json` (downloaded at app start → last cached copy → the small bundled list). Invalid entries are skipped.
+- ⚠️ A **private** repo's raw file can't be read by the app (it needs auth). Put `providers.json` in a **public repo or a public gist** and paste its raw URL in API Settings. Otherwise the cached/bundled list is used.
+- Fields: `name`, `type` (`openai` = OpenAI-compatible chat, `gemini`, `image-get` = GET URL template with `{prompt} {width} {height} {seed} {model}`), `url`, `model`, `needsKey`, `keyFrom` (`GROQ` / `GEMINI` / `OPENROUTER` / `OPENAI` / `HUGGINGFACE` / `CUSTOM`: which saved key it uses), `capabilities` (`text` / `image`), `priority` (lower first), `minIntervalMs`, `timeoutMs`, `note`.
+- Pollinations free image tier allows about 1 image per 45 s per IP (it answers HTTP 402 + Retry-After when you go faster; the app waits/falls back). OpenRouter `:free` models change often: edit `model` in providers.json, no app update needed.
+- AI features using it: Script Writer (AI tab), Hook/Title/Hashtags (AI tab), caption Translate and "Fix language" (Editor → Captions, with a preview before applying), AI image as background or sticker (Editor → AI image; added as a short image clip at the playhead, because there is no sticker/overlay track yet).

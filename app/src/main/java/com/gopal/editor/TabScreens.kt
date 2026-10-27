@@ -85,6 +85,8 @@ fun HomeScreen(
 ) {
     Column(Modifier.fillMaxSize().background(G.Bg)) {
         Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 10.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            GopalLogo(44)
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("Gopal Editor", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = G.Text)
                 Text("गोपाल एडिटर", fontSize = 13.sp, color = G.Sub)
@@ -195,23 +197,23 @@ fun ProjectsScreen(projects: List<ProjectEntity>, onOpen: (Long) -> Unit, onDele
 }
 
 @Composable
-fun AiScreen(keyCount: Int, onApi: () -> Unit, onNew: () -> Unit) {
+fun AiScreen(keyCount: Int, onApi: () -> Unit, onNew: () -> Unit, freeMode: Boolean = false, onScript: () -> Unit = {}, onIdeas: () -> Unit = {}) {
     Column(Modifier.fillMaxSize().background(G.Bg)) {
-        TopBar(L.t("AI tools", "AI टूल"), L.t("All run on your own API key", "सब आपकी अपनी API key से")) {
+        TopBar(L.t("AI tools", "AI टूल"), if (freeMode) L.t("Free mode on · your keys go first", "Free mode चालू · आपकी key पहले चलेगी") else L.t("All run on your own API key", "सब आपकी अपनी API key से")) {
             Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onApi), contentAlignment = Alignment.Center) { Icon(GI.Key, null, tint = G.Accent) }
         }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             AiRow(GI.CC, L.t("Auto Captions", "ऑटो कैप्शन"), L.t("Hindi · English · Hinglish, word-by-word highlight. Open a project → Captions.",
                 "हिंदी · इंग्लिश · Hinglish, शब्द-दर-शब्द हाइलाइट। प्रोजेक्ट खोलें → कैप्शन।"), live = true, onClick = onNew)
+            AiRow(GI.Sparkle, L.t("AI Script Writer", "AI स्क्रिप्ट राइटर"), L.t("Topic in, Hindi script out", "टॉपिक डालो, हिंदी स्क्रिप्ट पाओ"), live = true, onClick = onScript)
+            AiRow(GI.Sparkle, L.t("Hook / Title / Hashtags", "हुक / टाइटल / हैशटैग"), L.t("Ideas for your Reel", "रील के लिए सुझाव"), live = true, onClick = onIdeas)
+            AiRow(GI.CC, L.t("Translate · Fix caption language", "कैप्शन ट्रांसलेट · भाषा सुधार"), L.t("Open a project → Captions", "प्रोजेक्ट खोलें → कैप्शन"), live = true, onClick = onNew)
+            AiRow(GI.Sparkle, L.t("AI image (background / sticker)", "AI इमेज (बैकग्राउंड / स्टिकर)"), L.t("Open a project → AI image", "प्रोजेक्ट खोलें → AI इमेज"), live = true, onClick = onNew)
             SectionTitle(L.t("Coming next", "जल्द आ रहा है"))
             listOf(
-                L.t("AI Script Writer", "AI स्क्रिप्ट राइटर") to L.t("Topic in, script out", "टॉपिक डालो, स्क्रिप्ट पाओ"),
                 L.t("Text-to-Speech voiceover", "टेक्स्ट से आवाज़ (TTS)") to L.t("Voice for your script", "स्क्रिप्ट के लिए आवाज़"),
-                L.t("AI Translate captions", "AI कैप्शन ट्रांसलेट") to L.t("Any language", "किसी भी भाषा में"),
                 L.t("Smart Cut", "स्मार्ट कट") to L.t("Remove silent parts automatically", "चुप वाले हिस्से अपने आप हटें"),
-                L.t("Hook / Title / Hashtags", "हुक / टाइटल / हैशटैग") to L.t("Ideas for your Reel", "रील के लिए सुझाव"),
                 L.t("AI Chat assistant", "AI चैट असिस्टेंट") to L.t("“Make this a Reel” → edits the timeline", "“इसे रील बना दो” → टाइमलाइन बदले"),
-                L.t("AI image / background", "AI इमेज / बैकग्राउंड") to L.t("If your provider supports it", "अगर provider सपोर्ट करे"),
             ).forEach { (t, s) -> AiRow(GI.Sparkle, t, s, live = false) {} }
             Spacer(Modifier.height(16.dp))
             Text(L.t("$keyCount key(s) saved", "$keyCount key सेव हैं"), color = G.Sub, fontSize = 12.sp)
@@ -246,9 +248,7 @@ fun UpdatesScreen(
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             Card2 {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(G.Grad), contentAlignment = Alignment.Center) {
-                        Icon(GI.Movie, null, tint = Color.White)
-                    }
+                    GopalLogo(52)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("Gopal Editor", color = G.Text, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
@@ -328,4 +328,14 @@ fun SettingsScreen(keyCount: Int, versionName: String, onApi: () -> Unit, onLang
             }
         }
     }
+}
+
+/** Gopal Editor's own logo (Gk's photo, res/drawable/gopal_logo.webp) in a circle on the brand navy. */
+@Composable
+fun GopalLogo(size: Int) {
+    androidx.compose.foundation.Image(
+        androidx.compose.ui.res.painterResource(R.drawable.gopal_logo), "Gopal Editor",
+        Modifier.size(size.dp).clip(CircleShape).background(Color(0xFF0B1A30)),
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+    )
 }

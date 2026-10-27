@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Gopal Editor: video frame + play button over a little timeline with a red playhead. -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <group android:pivotX="54" android:pivotY="58" android:scaleX="0.82" android:scaleY="0.82">
-        <path android:fillColor="#FFFFFFFF" android:pathData="M34,28 H74 A6,6 0 0 1 80,34 V58 A6,6 0 0 1 74,64 H34 A6,6 0 0 1 28,58 V34 A6,6 0 0 1 34,28 Z" />
-        <path android:fillColor="#FF5B3FE0" android:pathData="M48,37 L48,55 L63,46 Z" />
-        <path android:fillColor="#FFFFE14D" android:pathData="M30,70 H50 A3,3 0 0 1 53,73 V73 A3,3 0 0 1 50,76 H30 A3,3 0 0 1 27,73 V73 A3,3 0 0 1 30,70 Z" />
-        <path android:fillColor="#FFFFFFFF" android:pathData="M58,70 H78 A3,3 0 0 1 81,73 V73 A3,3 0 0 1 78,76 H58 A3,3 0 0 1 55,73 V73 A3,3 0 0 1 58,70 Z" />
-        <path android:fillColor="#B3FFFFFF" android:pathData="M38,80 H70 A2.5,2.5 0 0 1 72.5,82.5 V82.5 A2.5,2.5 0 0 1 70,85 H38 A2.5,2.5 0 0 1 35.5,82.5 V82.5 A2.5,2.5 0 0 1 38,80 Z" />
-        <path android:fillColor="#FFFF3B5C" android:pathData="M53.2,66 H54.8 V89 H53.2 Z" />
-    </group>
-</vector>
+<!-- Gopal Editor icon foreground: Gk's photo, scaled uniformly (never stretched), face centred inside the 66dp safe zone. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/ic_launcher_photo"
+    android:gravity="fill"
+    android:filter="true" />

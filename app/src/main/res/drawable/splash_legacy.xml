@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch screen before Android 12: dark navy with the round photo in the middle. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/brand_dark" />
+    <item android:drawable="@drawable/ic_launcher_photo" android:gravity="center" android:width="180dp" android:height="180dp" />
+</layer-list>
