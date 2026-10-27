@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Gopal Editor: every push to main -> APK signed with the FIXED debug key in the repo
 # (app/debug.keystore) + GitHub Release + version.json, so the in-app Updates tab always works
 # and every build installs over the previous one without uninstalling.
@@ -6,6 +7,10 @@
 # (gopal-editor-release.apk). The Updates tab keeps using the debug-key apk.
 #   KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
 # Keep this repo PRIVATE: anyone with app/debug.keystore can sign an "update" for this app.
+=======
+# Gopal Editor: हर push पर debug APK + GitHub Release + version.json
+# कोई secret नहीं चाहिए (signing बाद में जोड़ेंगे)
+>>>>>>> origin/main
 name: Release APK
 
 on:
@@ -14,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # create releases + upload assets
+  contents: write
 
 concurrency:
   group: release
@@ -36,6 +41,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+<<<<<<< HEAD
       - name: Check the committed debug key
         run: |
           if [ ! -f app/debug.keystore ]; then
@@ -48,11 +54,18 @@ jobs:
         run: |
           VC=$(( ${{ github.run_number }} + 1 ))          # versionCode: run number + 1 (always increases, same as before)
           VN="1.1.${{ github.run_number }}"
+=======
+      - name: Version numbers
+        run: |
+          VC=$(( ${{ github.run_number }} + 1 ))
+          VN="1.0.${{ github.run_number }}"
+>>>>>>> origin/main
           echo "VERSION_CODE=$VC" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
           echo "TAG=v$VN" >> "$GITHUB_ENV"
           echo "Building $VN ($VC)"
 
+<<<<<<< HEAD
       - name: Build debug APK (fixed key) + unit tests
         run: |
           chmod +x gradlew
@@ -91,6 +104,17 @@ jobs:
             --out gopal-editor-release.apk app/build/outputs/apk/release/app-release-unsigned.apk
           "$BT/apksigner" verify gopal-editor-release.apk
           rm -f "$RUNNER_TEMP/release.jks"
+=======
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug \
+            -PappVersionCode="$VERSION_CODE" -PappVersionName="$VERSION_NAME" \
+            -PupdateRepo="${{ github.repository }}"
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk gopal-editor.apk
+>>>>>>> origin/main
 
       - name: Write version.json
         run: |
