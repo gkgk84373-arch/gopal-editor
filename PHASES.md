@@ -3,6 +3,9 @@
 ## Phase 1: MVP (this release) ✅
 API Settings + fallback · timeline (video / audio / text) with trim / split / delete / duplicate / zoom / undo · aspect ratios · Auto Captions (Whisper / Gemini / HF, Hindi / English / Hinglish, 8 styles) · export 720p / 1080p / 4K, 24/30/60 fps, bitrate, burn-in · Room autosave · Updates tab + GitHub Actions.
 
+## Auto Shorts ✅
+One long video → transcript (chunked STT) → AI picks 4–5 moments (30–60 s) → face-tracked 9:16 crop + captions → preview (trim / delete / open in editor) → export 1080×1920 30 fps, all in WorkManager with Room-saved stages.
+
 ## Phase 2: Editing power · एडिटिंग
 - **Speed 0.1x–100x + curve speed**: Media3 1.4.1 already has `SpeedChangeEffect` + `SpeedChangingAudioProcessor` with a `SpeedProvider` (piecewise speed = curves). Pitch-kept audio via Sonic.
 - **Freeze frame**: grab the frame (MediaMetadataRetriever / ImageReader) → still-image item with a duration in the sequence.
