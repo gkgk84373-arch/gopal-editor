@@ -1,0 +1,16 @@
+Gopal Editor — Auto Shorts: new/changed files (relative to the Free AI + branding version)
+
+NEW     app/src/main/java/com/gopal/editor/AutoShortsCore.kt — Pure logic: audio chunk plan + transcript offset/merge, moment prompt (strict JSON), robust moment parser (fences/repair/truncation), boundary snapping (segment edges, 30-60 s, no overlaps, inside video), clip caption re-timing, 9:16 crop math + face-path smoothing
+NEW     app/src/main/java/com/gopal/editor/AutoShortsEngine.kt — Pipeline: chunked STT via existing ProviderChain/AiClient.transcribe, AI selection via existing FreeAiRouter (parse, retry once, snap), FaceDetector face track + 9:16 thumbnails, time-varying crop MatrixTransformation, 1080x1920 30fps H.264 14 Mbps export with existing caption renderer, save to Movies/GopalEditor, open-as-project
+NEW     app/src/main/java/com/gopal/editor/AutoShortsWorker.kt — WorkManager CoroutineWorker with foreground notification (dataSync): analyze job and export queue; resumes from Room-saved stages
+NEW     app/src/main/java/com/gopal/editor/AutoShortsScreen.kt — ShortsVm + Compose screens: pick video, language + caption style, progress, Hindi error with Add key / Try again, preview cards (thumb, title, score, reason, hashtags), trim start/end, delete, open in Editor, Export / Export all
+CHANGED app/src/main/java/com/gopal/editor/Data.kt — Room v3: short_jobs + short_clips tables, ShortsDao, MIGRATION_2_3 (adds tables only)
+CHANGED app/src/main/java/com/gopal/editor/MainActivity.kt — Route.SHORTS + ShortsVm; opens a short as a normal editor project
+CHANGED app/src/main/java/com/gopal/editor/TabScreens.kt — AI tab: new live "Auto Shorts" entry
+CHANGED app/src/main/AndroidManifest.xml — POST_NOTIFICATIONS, FOREGROUND_SERVICE, FOREGROUND_SERVICE_DATA_SYNC; WorkManager foreground service typed dataSync (Android 14)
+CHANGED app/build.gradle.kts — adds androidx.work:work-runtime-ktx:2.9.1
+NEW     app/schemas/com.gopal.editor.EditorDb/3.json — Room's exported schema v3 (used by the migration test)
+NEW     app/src/test/java/com/gopal/editor/AutoShortsTest.kt — 18 tests: moment JSON parsing/repair, boundary snapping, chunk plan + offset merge, caption re-timing, crop window/NDC/smoothing math, prompt size
+NEW     app/src/test/java/com/gopal/editor/ShortsMigrationTest.kt — 2 tests: Room v2->v3 on real SQLite, old projects/LUTs untouched, new tables/index match 3.json
+CHANGED README.md — Auto Shorts section (Hindi + English), permissions, STT key note
+CHANGED PHASES.md — Auto Shorts listed as done
